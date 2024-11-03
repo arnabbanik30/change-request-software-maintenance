@@ -1,0 +1,90 @@
+# .github/workflows/issue-management.yml
+name: Issue Management
+on:
+  issues:
+    types: [assigned]  # Trigger when someone is assigned to an issue
+
+jobs:
+  update-issue:
+    runs-on: ubuntu-latest
+    # Check if issue title starts with [CR] and has 'submitted' label
+    if: startsWith(github.event.issue.title, '[CR]') && contains(github.event.issue.labels.*.name, 'submitted')
+    steps:
+      - name: Update Issue Label
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          # Remove 'submitted' label and add 'review' label
+          gh issue edit $ISSUE_NUMBER --remove-label "submitted" --add-label "review"
+
+      - name: Move Issue in Project
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const projectQuery = `
+              query($org: String!, $number: Int!) {
+                organization(login: $org) {
+                  projectV2(number: $number) {
+                    id
+                    field(name: "Status") {
+                      ... on ProjectV2SingleSelectField {
+                        id
+                        options {
+                          id
+                          name
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            `;
+
+            const updateProjectQuery = `
+              mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                updateProjectV2ItemFieldValue(
+                  input: {
+                    projectId: $projectId
+                    itemId: $itemId
+                    fieldId: $fieldId
+                    value: { 
+                      singleSelectOptionId: $optionId
+                    }
+                  }
+                ) {
+                  projectV2Item {
+                    id
+                  }
+                }
+              }
+            `;
+
+            try {
+              // Get project details - note project #2
+              const project = await github.graphql(projectQuery, {
+                org: context.repo.owner,
+                number: 2  // Your project number
+              });
+
+              // Find the "Review" option ID
+              const statusField = project.organization.projectV2.field;
+              const reviewOption = statusField.options.find(opt => opt.name === "Review");
+
+              // Get the item ID for this issue in the project
+              const itemId = /* Query for item ID */;
+
+              // Update the status
+              await github.graphql(updateProjectQuery, {
+                projectId: project.organization.projectV2.id,
+                itemId: itemId,
+                fieldId: statusField.id,
+                optionId: reviewOption.id
+              });
+
+            } catch (error) {
+              console.error('Error:', error);
+              core.setFailed(error.message);
+            }
