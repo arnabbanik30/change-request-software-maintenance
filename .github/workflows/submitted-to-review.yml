@@ -2,21 +2,29 @@
 name: Issue Management
 on:
   issues:
-    types: [assigned]  # Trigger when someone is assigned to an issue
+    types: [assigned]
 
 jobs:
   update-issue:
     runs-on: ubuntu-latest
-    # Check if issue title starts with [CR] and has 'submitted' label
     if: startsWith(github.event.issue.title, '[CR]') && contains(github.event.issue.labels.*.name, 'submitted')
     steps:
+      # First, checkout the repository
+      - uses: actions/checkout@v3
+      
+      # Login to GitHub CLI
+      - name: Login to GitHub CLI
+        run: |
+          gh auth login --with-token <<< "${{ secrets.GITHUB_TOKEN }}"
+          
+      # Now update the labels
       - name: Update Issue Label
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
         run: |
-          # Remove 'submitted' label and add 'review' label
-          gh issue edit $ISSUE_NUMBER --remove-label "submitted" --add-label "review"
+          gh issue edit $ISSUE_NUMBER --repo $REPO --remove-label "submitted" --add-label "review"
 
       - name: Move Issue in Project
         env:
@@ -63,20 +71,17 @@ jobs:
             `;
 
             try {
-              // Get project details - note project #2
               const project = await github.graphql(projectQuery, {
                 org: context.repo.owner,
-                number: 2  // Your project number
+                number: 2
               });
 
-              // Find the "Review" option ID
               const statusField = project.organization.projectV2.field;
               const reviewOption = statusField.options.find(opt => opt.name === "Review");
 
               // Get the item ID for this issue in the project
               const itemId = /* Query for item ID */;
 
-              // Update the status
               await github.graphql(updateProjectQuery, {
                 projectId: project.organization.projectV2.id,
                 itemId: itemId,
