@@ -1,95 +1,61 @@
-# .github/workflows/issue-management.yml
-name: Issue Management
+name: Update Issue Status on Assignment
+
 on:
   issues:
     types: [assigned]
 
 jobs:
-  update-issue:
+  update-issue-status:
     runs-on: ubuntu-latest
-    if: startsWith(github.event.issue.title, '[CR]') && contains(github.event.issue.labels.*.name, 'submitted')
     steps:
-      # First, checkout the repository
-      - uses: actions/checkout@v3
-      
-      # Login to GitHub CLI
-      - name: Login to GitHub CLI
-        run: |
-          gh auth login --with-token <<< "${{ secrets.GITHUB_TOKEN }}"
-          
-      # Now update the labels
-      - name: Update Issue Label
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          REPO: ${{ github.repository }}
-        run: |
-          gh issue edit $ISSUE_NUMBER --repo $REPO --remove-label "submitted" --add-label "review"
-
-      - name: Move Issue in Project
-        env:
-          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+      - name: Check if Issue is CR
+        id: check_cr
         uses: actions/github-script@v6
         with:
           script: |
-            const projectQuery = `
-              query($org: String!, $number: Int!) {
-                organization(login: $org) {
-                  projectV2(number: $number) {
-                    id
-                    field(name: "Status") {
-                      ... on ProjectV2SingleSelectField {
-                        id
-                        options {
-                          id
-                          name
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            `;
+            const isCR = context.payload.issue.title.startsWith('[CR]');
+            return isCR;
+      
+      - name: Update Issue Label and Project
+        if: steps.check_cr.outputs.result == 'true'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const { issue, repository } = context.payload;
+            const octokit = github.getOctokit(process.env.GITHUB_TOKEN);
 
-            const updateProjectQuery = `
-              mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
-                updateProjectV2ItemFieldValue(
-                  input: {
-                    projectId: $projectId
-                    itemId: $itemId
-                    fieldId: $fieldId
-                    value: { 
-                      singleSelectOptionId: $optionId
-                    }
-                  }
-                ) {
-                  projectV2Item {
-                    id
-                  }
-                }
-              }
-            `;
-
-            try {
-              const project = await github.graphql(projectQuery, {
-                org: context.repo.owner,
-                number: 2
+            // Change label from 'submitted' to 'review'
+            const labels = issue.labels.map(label => label.name);
+            if (labels.includes('submitted')) {
+              await octokit.rest.issues.update({
+                owner: repository.owner.login,
+                repo: repository.name,
+                issue_number: issue.number,
+                labels: labels.filter(label => label !== 'submitted').concat('review'),
               });
-
-              const statusField = project.organization.projectV2.field;
-              const reviewOption = statusField.options.find(opt => opt.name === "Review");
-
-              // Get the item ID for this issue in the project
-              const itemId = /* Query for item ID */;
-
-              await github.graphql(updateProjectQuery, {
-                projectId: project.organization.projectV2.id,
-                itemId: itemId,
-                fieldId: statusField.id,
-                optionId: reviewOption.id
-              });
-
-            } catch (error) {
-              console.error('Error:', error);
-              core.setFailed(error.message);
             }
+
+            // Move issue to 'review' column in Project #2
+            const projectNumber = 2;
+            const projectColumns = await octokit.rest.projects.listColumns({
+              project_id: projectNumber,
+            });
+            const submittedColumn = projectColumns.data.find(column => column.name === 'submitted');
+            const reviewColumn = projectColumns.data.find(column => column.name === 'review');
+            
+            if (submittedColumn && reviewColumn) {
+              const cards = await octokit.rest.projects.listCards({
+                column_id: submittedColumn.id,
+              });
+              const card = cards.data.find(card => card.content_url && card.content_url.includes(`/issues/${issue.number}`));
+              
+              if (card) {
+                await octokit.rest.projects.moveCard({
+                  card_id: card.id,
+                  position: 'top',
+                  column_id: reviewColumn.id,
+                });
+              }
+            }
+          env:
+            GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
