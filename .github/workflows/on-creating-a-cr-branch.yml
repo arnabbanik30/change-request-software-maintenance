@@ -3,81 +3,50 @@ name: Update Project Status on Branch Creation
 on:
   create:
     branches:
-      - '*'  # Triggers on all branch creations
+      - '*'
 
 jobs:
   update-project-status:
     runs-on: ubuntu-latest
-    # Remove the if condition from here to check the branch name inside the steps
+    if: contains(github.ref_name, '-cr-')
     
     steps:
-      - name: Debug Information
-        env:
-          BRANCH_NAME: ${{ github.ref_name }}
-        run: |
-          echo "Branch name: ${{ github.ref_name }}"
-          echo "Event name: ${{ github.event_name }}"
-          echo "Event type: ${{ github.event.ref_type }}"
-
       - name: Update project status
-        if: contains(github.ref_name, '-cr-')  # Move condition here and simplify it
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
           PROJECT_ID: "PVT_kwHOBJsXdM4Arizg"
           STATUS_FIELD_ID: "PVTSSF_lAHOBJsXdM4ArizgzginKI8"
           COMMITTED_OPTION_ID: "30c5553b"
-          BRANCH_NAME: ${{ github.ref_name }}
         run: |
-          echo "Processing branch: $BRANCH_NAME"
+          ISSUE_NUMBER=$(echo "${{ github.ref_name }}" | sed -n 's/^\([0-9]\+\)-cr-.*/\1/p')
           
-          # Extract the issue number from branch name (e.g., "5-cr-..." -> "5")
-          ISSUE_NUMBER=$(echo "$BRANCH_NAME" | sed -n 's/^\([0-9]\+\)-cr-.*/\1/p')
-          echo "Extracted issue number: $ISSUE_NUMBER"
-          
-          if [ ! -z "$ISSUE_NUMBER" ]; then
-            echo "Getting project item ID for issue #$ISSUE_NUMBER"
-            
-            # Get the project item id for this issue
-            ITEM_ID=$(gh api graphql -f query='
-              query($owner: String!, $repo: String!, $number: Int!) {
-                repository(owner: $owner, name: $repo) {
-                  issue(number: $number) {
-                    projectItems(first: 1) {
-                      nodes {
-                        id
-                      }
-                    }
-                  }
-                }
-              }' -f owner=${{ github.repository_owner }} -f repo=${{ github.event.repository.name }} -f number=$ISSUE_NUMBER --jq '.data.repository.issue.projectItems.nodes[0].id')
-            
-            echo "Found item ID: $ITEM_ID"
-            
-            if [ ! -z "$ITEM_ID" ]; then
-              echo "Updating status to Committed"
-              # Update the status to "Committed"
-              gh api graphql -f query='
-                mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
-                  updateProjectV2ItemFieldValue(
-                    input: {
-                      projectId: $projectId
-                      itemId: $itemId
-                      fieldId: $fieldId
-                      value: { 
-                        singleSelectOptionId: $optionId
-                      }
-                    }
-                  ) {
-                    projectV2Item {
+          ITEM_ID=$(gh api graphql -f query='
+            query($owner: String!, $repo: String!, $number: Int!) {
+              repository(owner: $owner, name: $repo) {
+                issue(number: $number) {
+                  projectItems(first: 1) {
+                    nodes {
                       id
                     }
                   }
-                }' -f projectId=$PROJECT_ID -f itemId=$ITEM_ID -f fieldId=$STATUS_FIELD_ID -f optionId=$COMMITTED_OPTION_ID
-              
-              echo "Status updated successfully"
-            else
-              echo "Error: Could not find project item ID"
-            fi
-          else
-            echo "Error: Could not extract issue number from branch name"
-          fi
+                }
+              }
+            }' -f owner=${{ github.repository_owner }} -f repo=${{ github.event.repository.name }} -f number=$ISSUE_NUMBER --jq '.data.repository.issue.projectItems.nodes[0].id')
+          
+          gh api graphql -f query='
+            mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+              updateProjectV2ItemFieldValue(
+                input: {
+                  projectId: $projectId
+                  itemId: $itemId
+                  fieldId: $fieldId
+                  value: { 
+                    singleSelectOptionId: $optionId
+                  }
+                }
+              ) {
+                projectV2Item {
+                  id
+                }
+              }
+            }' -f projectId=$PROJECT_ID -f itemId=$ITEM_ID -f fieldId=$STATUS_FIELD_ID -f optionId=$COMMITTED_OPTION_ID
