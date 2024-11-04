@@ -1,36 +1,30 @@
 name: CR Issue Label Management
-
 on:
   issues:
     types: [assigned]
-
 permissions:
   issues: write
   contents: read
-
 jobs:
   update-label:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/github-script@v7
         with:
-          # github-token: ${{ secrets.GH_PROJECT_TOKEN }}  # Use the PAT here
+          # github-token: ${{ secrets.GH_PROJECT_TOKEN }}
           script: |
             const issue = context.payload.issue;
-
             // Check if issue title starts with [CR]
             if (!issue.title.startsWith('[CR]')) {
               console.log('Not a CR issue, skipping...');
               return;
             }
-
             // Check if issue has 'submitted' label
             const hasSubmittedLabel = issue.labels.some(label => label.name === 'submitted');
             if (!hasSubmittedLabel) {
               console.log('Issue does not have submitted label, skipping...');
               return;
             }
-
             // Remove 'submitted' label and add 'review' label
             await github.rest.issues.removeLabel({
               owner: context.repo.owner,
@@ -38,70 +32,140 @@ jobs:
               issue_number: issue.number,
               name: 'submitted'
             });
-
             await github.rest.issues.addLabels({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: issue.number,
               labels: ['review']
             });
-
             console.log('Successfully updated labels');
-
       - uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.PAT_TOKEN }}  # Use the PAT here as well
+          github-token: ${{ secrets.PAT_TOKEN }}
           script: |
-            // Define project and column names
-            const projectNumber = 2;
-            const submittedColumnName = "submitted";
-            const reviewColumnName = "Review";
-
-            // Get project ID by listing all projects for the repo or org
-            const projects = await github.rest.projects.listForRepo({
+            // First, query the project structure to get field IDs
+            const projectQuery = `
+              query($projectNumber: Int!) {
+                viewer {
+                  projectV2(number: $projectNumber) {
+                    id
+                    fields(first: 20) {
+                      nodes {
+                        ... on ProjectV2SingleSelectField {
+                          id
+                          name
+                          options {
+                            id
+                            name
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            `;
+            
+            const projectNumber = 2; // Your project number
+            
+            // Get project structure
+            const projectData = await github.graphql(projectQuery, {
+              projectNumber: projectNumber
+            });
+            
+            // Find the status field and option IDs
+            const statusField = projectData.viewer.projectV2.fields.nodes.find(
+              field => field.name.toLowerCase() === 'status'
+            );
+            
+            if (!statusField) {
+              console.error('Status field not found in project');
+              return;
+            }
+            
+            const submittedOption = statusField.options.find(
+              option => option.name.toLowerCase() === 'submitted'
+            );
+            const reviewOption = statusField.options.find(
+              option => option.name.toLowerCase() === 'Review'
+            );
+            
+            if (!submittedOption || !reviewOption) {
+              console.error('Required status options not found');
+              return;
+            }
+            
+            // Query for the current issue's project item
+            const issueQuery = `
+              query($owner: String!, $repo: String!, $number: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  issue(number: $number) {
+                    projectItems(first: 100) {
+                      nodes {
+                        id
+                        project {
+                          id
+                          number
+                        }
+                        fieldValueByName(name: "Status") {
+                          ... on ProjectV2ItemFieldSingleSelectValue {
+                            name
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            `;
+            
+            const issueResult = await github.graphql(issueQuery, {
               owner: context.repo.owner,
               repo: context.repo.repo,
+              number: context.payload.issue.number
             });
-
-            const project = projects.data.find(p => p.number === projectNumber);
-            if (!project) {
-              console.log('Project not found');
+            
+            // Find the project item for this issue
+            const projectItems = issueResult.repository.issue.projectItems.nodes;
+            const projectItem = projectItems.find(item => 
+              item.project.number === projectNumber &&
+              item.fieldValueByName?.name?.toLowerCase() === 'submitted'
+            );
+            
+            if (!projectItem) {
+              console.log('Issue not found in project or not in Submitted status');
               return;
             }
-
-            // Fetch columns for the project
-            const columns = await github.rest.projects.listColumns({
-              project_id: project.id
-            });
-
-            // Find column IDs based on names
-            const submittedColumn = columns.data.find(col => col.name === submittedColumnName);
-            const reviewColumn = columns.data.find(col => col.name === reviewColumnName);
-
-            if (!submittedColumn || !reviewColumn) {
-              console.log('One or both columns not found');
-              return;
-            }
-
-            console.log(`Submitted Column ID: ${submittedColumn.id}`);
-            console.log(`Review Column ID: ${reviewColumn.id}`);
-
-            // Get the project card associated with the issue
-            const { data: cards } = await github.rest.projects.listCards({
-              column_id: submittedColumn.id
-            });
-
-            // Find the card that matches this issue
-            const card = cards.find(card => card.content_url.endsWith(`/issues/${context.payload.issue.number}`));
-
-            if (card) {
-              // Move the card to the 'Review' column
-              await github.rest.projects.moveCard({
-                card_id: card.id,
-                position: 'top',
-                column_id: reviewColumn.id
+            
+            // Update the status field
+            const mutation = `
+              mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                updateProjectV2ItemFieldValue(
+                  input: {
+                    projectId: $projectId
+                    itemId: $itemId
+                    fieldId: $fieldId
+                    value: {
+                      singleSelectOptionId: $optionId
+                    }
+                  }
+                ) {
+                  projectV2Item {
+                    id
+                  }
+                }
+              }
+            `;
+            
+            try {
+              await github.graphql(mutation, {
+                projectId: projectData.viewer.projectV2.id,
+                itemId: projectItem.id,
+                fieldId: statusField.id,
+                optionId: reviewOption.id
               });
-              console.log('Successfully moved issue to the Review column');
-            } else {
-              console.log('No card found in the Submitted column for this issue');
+              console.log('Successfully updated project item status from Submitted to Review');
+            } catch (error) {
+              console.error('Error updating project item:', error);
+              console.error('Error details:', error.message);
             }
