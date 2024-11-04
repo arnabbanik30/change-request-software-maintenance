@@ -1,8 +1,8 @@
 name: Close Issue on Project Status
 
 on:
-  projects_v2_item:
-    types: [edited]
+  project_card:
+    types: [converted, moved]
 
 permissions:
   issues: write
@@ -17,39 +17,50 @@ jobs:
           github-token: ${{ secrets.PAT_TOKEN }}
           script: |
             try {
-              // Check if the change was to the status field and if it's set to "Closed"
-              const statusFieldId = 'PVTSSF_lAHOBJsXdM4ArizgzginKI8';
-              const closedOptionId = '20c68cd1';
-              
-              if (context.payload.changes?.field_value?.field_node_id === statusFieldId &&
-                  context.payload.changes?.field_value?.value?.node_id === closedOptionId) {
-                
-                // Query to get the issue number associated with this project item
-                const itemQuery = `
-                  query($nodeId: ID!) {
-                    node(id: $nodeId) {
-                      ... on ProjectV2Item {
-                        content {
-                          ... on Issue {
-                            number
-                            repository {
-                              name
-                              owner {
-                                login
+              // Query to check the current status of the issue in the project
+              const projectQuery = `
+                query($itemId: ID!) {
+                  node(id: $itemId) {
+                    ... on ProjectV2Item {
+                      fieldValues(first: 20) {
+                        nodes {
+                          ... on ProjectV2ItemFieldSingleSelectValue {
+                            name
+                            field {
+                              ... on ProjectV2SingleSelectField {
+                                name
                               }
+                            }
+                          }
+                        }
+                      }
+                      content {
+                        ... on Issue {
+                          number
+                          repository {
+                            name
+                            owner {
+                              login
                             }
                           }
                         }
                       }
                     }
                   }
-                `;
-                
-                const itemResult = await github.graphql(itemQuery, {
-                  nodeId: context.payload.projects_v2_item.node_id
-                });
-                
-                const issue = itemResult.node.content;
+                }
+              `;
+              
+              const result = await github.graphql(projectQuery, {
+                itemId: context.payload.project_card.node_id
+              });
+              
+              // Check if status is "Closed"
+              const statusField = result.node.fieldValues.nodes.find(
+                node => node.field?.name === 'Status' && node.name === 'Closed'
+              );
+              
+              if (statusField) {
+                const issue = result.node.content;
                 if (issue) {
                   // Close the issue
                   await github.rest.issues.update({
