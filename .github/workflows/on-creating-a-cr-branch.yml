@@ -19,11 +19,12 @@ jobs:
           github-token: ${{ secrets.PAT_TOKEN }}
           script: |
             try {
-              // Extract issue number from branch name
-              const issueNumber = parseInt(github.ref_name.match(/^(\d+)-cr-/)?.[1]);
+              // Extract issue number from branch name using context
+              const branchName = context.ref_name || context.payload.ref;
+              const issueNumber = parseInt(branchName.match(/^(\d+)-cr-/)?.[1]);
               
               if (!issueNumber) {
-                console.log('Could not extract issue number from branch name');
+                console.log('Could not extract issue number from branch name:', branchName);
                 return;
               }
 
