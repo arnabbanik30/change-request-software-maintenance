@@ -22,7 +22,6 @@ jobs:
         with:
           script: |
             const { issue, repository } = context.payload;
-            const octokit = github.getOctokit(process.env.GITHUB_TOKEN);
 
             // Replace 'submitted' label with 'review'
             const labels = issue.labels.map(label => label.name);
