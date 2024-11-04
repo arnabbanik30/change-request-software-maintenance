@@ -1,73 +1,44 @@
-name: Update Issue Status on Assignment
+name: CR Issue Label Management
 
 on:
   issues:
     types: [assigned]
 
-permissions:
-  issues: write
-  project: write
-  contents: read
-
 jobs:
-  update-issue-status:
+  update-label:
     runs-on: ubuntu-latest
     steps:
-      - name: Check if Issue is CR
-        id: check_cr
-        uses: actions/github-script@v6
+      - uses: actions/github-script@v7
         with:
           script: |
-            return context.payload.issue.title.startsWith('[CR]');
-
-      - name: Update Issue Label and Project
-        if: steps.check_cr.outputs.result == 'true'
-        uses: actions/github-script@v6
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const { issue, repository } = context.payload;
+            const issue = context.payload.issue;
             
-            // Replace 'submitted' label with 'review'
-            const labels = issue.labels.map(label => label.name);
-            if (labels.includes('submitted')) {
-              await github.rest.issues.update({
-                owner: repository.owner.login,
-                repo: repository.name,
-                issue_number: issue.number,
-                labels: labels.filter(label => label !== 'submitted').concat('review'),
-              });
+            // Check if issue title starts with [CR]
+            if (!issue.title.startsWith('[CR]')) {
+              console.log('Not a CR issue, skipping...');
+              return;
             }
             
-            // Get the project by project number
-            const projects = await github.rest.projects.listForRepo({
-              owner: repository.owner.login,
-              repo: repository.name,
-            });
-            const project = projects.data.find(p => p.number === 2);
-            if (!project) throw new Error("Project with number 2 not found");
-            
-            // Fetch columns in the project
-            const columns = await github.rest.projects.listColumns({
-              project_id: project.id,
-            });
-            const submittedColumn = columns.data.find(col => col.name === 'submitted');
-            const reviewColumn = columns.data.find(col => col.name === 'review');
-            
-            // Move card from 'submitted' to 'review' if found
-            if (submittedColumn && reviewColumn) {
-              const cards = await github.rest.projects.listCards({
-                column_id: submittedColumn.id,
-              });
-              const card = cards.data.find(card => 
-                card.content_url && 
-                card.content_url.includes(`/issues/${issue.number}`)
-              );
-              if (card) {
-                await github.rest.projects.moveCard({
-                  card_id: card.id,
-                  position: 'top',
-                  column_id: reviewColumn.id,
-                });
-              }
+            // Check if issue has 'submitted' label
+            const hasSubmittedLabel = issue.labels.some(label => label.name === 'submitted');
+            if (!hasSubmittedLabel) {
+              console.log('Issue does not have submitted label, skipping...');
+              return;
             }
+            
+            // Remove 'submitted' label and add 'review' label
+            await github.rest.issues.removeLabel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              name: 'submitted'
+            });
+            
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              labels: ['review']
+            });
+            
+            console.log('Successfully updated labels');
