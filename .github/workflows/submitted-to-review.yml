@@ -7,24 +7,15 @@ on:
 jobs:
   update-issue-status:
     runs-on: ubuntu-latest
-    steps:
-    
-      - name: Install GitHub CLI
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gh
 
-      - name: Login to GitHub CLI
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
-      
+    steps:
       - name: Check if Issue is CR
         id: check_cr
         uses: actions/github-script@v6
         with:
           script: |
-            const isCR = context.payload.issue.title.startsWith('[CR]');
-            return isCR;
-      
+            return context.payload.issue.title.startsWith('[CR]');
+
       - name: Update Issue Label and Project
         if: steps.check_cr.outputs.result == 'true'
         uses: actions/github-script@v6
@@ -33,7 +24,7 @@ jobs:
             const { issue, repository } = context.payload;
             const octokit = github.getOctokit(process.env.GITHUB_TOKEN);
 
-            // Change label from 'submitted' to 'review'
+            // Replace 'submitted' label with 'review'
             const labels = issue.labels.map(label => label.name);
             if (labels.includes('submitted')) {
               await octokit.rest.issues.update({
@@ -44,20 +35,28 @@ jobs:
               });
             }
 
-            // Move issue to 'review' column in Project #2
-            const projectNumber = 2;
-            const projectColumns = await octokit.rest.projects.listColumns({
-              project_id: projectNumber,
+            // Get the project by project number
+            const projects = await octokit.rest.projects.listForRepo({
+              owner: repository.owner.login,
+              repo: repository.name,
             });
-            const submittedColumn = projectColumns.data.find(column => column.name === 'submitted');
-            const reviewColumn = projectColumns.data.find(column => column.name === 'review');
-            
+            const project = projects.data.find(p => p.number === 2);
+            if (!project) throw new Error("Project with number 2 not found");
+
+            // Fetch columns in the project
+            const columns = await octokit.rest.projects.listColumns({
+              project_id: project.id,
+            });
+            const submittedColumn = columns.data.find(col => col.name === 'submitted');
+            const reviewColumn = columns.data.find(col => col.name === 'review');
+
+            // Move card from 'submitted' to 'review' if found
             if (submittedColumn && reviewColumn) {
               const cards = await octokit.rest.projects.listCards({
                 column_id: submittedColumn.id,
               });
               const card = cards.data.find(card => card.content_url && card.content_url.includes(`/issues/${issue.number}`));
-              
+
               if (card) {
                 await octokit.rest.projects.moveCard({
                   card_id: card.id,
@@ -66,5 +65,5 @@ jobs:
                 });
               }
             }
-          env:
-            GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
