@@ -1,31 +1,57 @@
-
 name: Update Project Status on Branch Creation
 
 on:
   create:
     branches:
-      - "*"
+      - '*'  # Triggers on all branch creations
 
 jobs:
-  update-status:
+  update-project-status:
     runs-on: ubuntu-latest
-
+    if: startsWith(github.ref_name, '*-cr-')  # Only run if branch name matches pattern
+    
     steps:
-      - name: Check branch name
-        id: check_branch
-        run: |
-          if [[ "${GITHUB_REF#refs/heads/}" =~ ^[0-9]+-cr- ]]; then
-            echo "::set-output name=cr_issue_number::${BASH_REMATCH[1]}"
-          fi
-
-      - name: Update Project Status to 'Committed'
-        if: steps.check_branch.outputs.cr_issue_number
+      - name: Update project status
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          PROJECT_ID: "PVT_kwHOBJsXdM4Arizg"
+          STATUS_FIELD_ID: "PVTSSF_lAHOBJsXdM4ArizgzginKI8"
+          COMMITTED_OPTION_ID: "30c5553b"
         run: |
-          curl -X POST -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d '{
-              "query": "mutation { updateProjectV2ItemFieldValue(input: {projectId: \"PVT_kwHOBJsXdM4Arizg\", itemId: \"${{ steps.check_branch.outputs.cr_issue_number }}\", fieldId: \"PVTSSF_lAHOBJsXdM4ArizgzginKI8\", value: \"30c5553b\" }) { clientMutationId } }"
-            }' \
-            https://api.github.com/graphql
+          # Extract the issue number from branch name (e.g., "5-cr-..." -> "5")
+          ISSUE_NUMBER=$(echo "${{ github.ref_name }}" | sed -n 's/^\([0-9]\+\)-cr-.*/\1/p')
+          
+          if [ ! -z "$ISSUE_NUMBER" ]; then
+            # Get the project item id for this issue
+            ITEM_ID=$(gh api graphql -f query='
+              query($owner: String!, $repo: String!, $number: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  issue(number: $number) {
+                    projectItems(first: 1) {
+                      nodes {
+                        id
+                      }
+                    }
+                  }
+                }
+              }' -f owner=${{ github.repository_owner }} -f repo=${{ github.event.repository.name }} -f number=$ISSUE_NUMBER --jq '.data.repository.issue.projectItems.nodes[0].id')
+            
+            # Update the status to "Committed"
+            gh api graphql -f query='
+              mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                updateProjectV2ItemFieldValue(
+                  input: {
+                    projectId: $projectId
+                    itemId: $itemId
+                    fieldId: $fieldId
+                    value: { 
+                      singleSelectOptionId: $optionId
+                    }
+                  }
+                ) {
+                  projectV2Item {
+                    id
+                  }
+                }
+              }' -f projectId=$PROJECT_ID -f itemId=$ITEM_ID -f fieldId=$STATUS_FIELD_ID -f optionId=$COMMITTED_OPTION_ID
+          fi
