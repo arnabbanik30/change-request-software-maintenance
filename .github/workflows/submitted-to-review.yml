@@ -4,7 +4,6 @@ on:
   issues:
     types: [assigned]
 
-# Add permissions block to allow issue modifications
 permissions:
   issues: write
   contents: read
@@ -15,22 +14,23 @@ jobs:
     steps:
       - uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.GH_PROJECT_TOKEN }}  # Use the PAT here
           script: |
             const issue = context.payload.issue;
-            
+
             // Check if issue title starts with [CR]
             if (!issue.title.startsWith('[CR]')) {
               console.log('Not a CR issue, skipping...');
               return;
             }
-            
+
             // Check if issue has 'submitted' label
             const hasSubmittedLabel = issue.labels.some(label => label.name === 'submitted');
             if (!hasSubmittedLabel) {
               console.log('Issue does not have submitted label, skipping...');
               return;
             }
-            
+
             // Remove 'submitted' label and add 'review' label
             await github.rest.issues.removeLabel({
               owner: context.repo.owner,
@@ -38,12 +38,70 @@ jobs:
               issue_number: issue.number,
               name: 'submitted'
             });
-            
+
             await github.rest.issues.addLabels({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: issue.number,
               labels: ['review']
             });
-            
+
             console.log('Successfully updated labels');
+
+      - uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PAT_TOKEN }}  # Use the PAT here as well
+          script: |
+            // Define project and column names
+            const projectNumber = 2;
+            const submittedColumnName = "submitted";
+            const reviewColumnName = "Review";
+
+            // Get project ID by listing all projects for the repo or org
+            const projects = await github.rest.projects.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+
+            const project = projects.data.find(p => p.number === projectNumber);
+            if (!project) {
+              console.log('Project not found');
+              return;
+            }
+
+            // Fetch columns for the project
+            const columns = await github.rest.projects.listColumns({
+              project_id: project.id
+            });
+
+            // Find column IDs based on names
+            const submittedColumn = columns.data.find(col => col.name === submittedColumnName);
+            const reviewColumn = columns.data.find(col => col.name === reviewColumnName);
+
+            if (!submittedColumn || !reviewColumn) {
+              console.log('One or both columns not found');
+              return;
+            }
+
+            console.log(`Submitted Column ID: ${submittedColumn.id}`);
+            console.log(`Review Column ID: ${reviewColumn.id}`);
+
+            // Get the project card associated with the issue
+            const { data: cards } = await github.rest.projects.listCards({
+              column_id: submittedColumn.id
+            });
+
+            // Find the card that matches this issue
+            const card = cards.find(card => card.content_url.endsWith(`/issues/${context.payload.issue.number}`));
+
+            if (card) {
+              // Move the card to the 'Review' column
+              await github.rest.projects.moveCard({
+                card_id: card.id,
+                position: 'top',
+                column_id: reviewColumn.id
+              });
+              console.log('Successfully moved issue to the Review column');
+            } else {
+              console.log('No card found in the Submitted column for this issue');
+            }
