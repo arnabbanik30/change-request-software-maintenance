@@ -1,0 +1,31 @@
+
+name: Update Project Status on Branch Creation
+
+on:
+  create:
+    branches:
+      - "*"
+
+jobs:
+  update-status:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check branch name
+        id: check_branch
+        run: |
+          if [[ "${GITHUB_REF#refs/heads/}" =~ ^[0-9]+-cr- ]]; then
+            echo "::set-output name=cr_issue_number::${BASH_REMATCH[1]}"
+          fi
+
+      - name: Update Project Status to 'Committed'
+        if: steps.check_branch.outputs.cr_issue_number
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          curl -X POST -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "query": "mutation { updateProjectV2ItemFieldValue(input: {projectId: \"PVT_kwHOBJsXdM4Arizg\", itemId: \"${{ steps.check_branch.outputs.cr_issue_number }}\", fieldId: \"PVTSSF_lAHOBJsXdM4ArizgzginKI8\", value: \"30c5553b\" }) { clientMutationId } }"
+            }' \
+            https://api.github.com/graphql
