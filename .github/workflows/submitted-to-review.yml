@@ -7,7 +7,6 @@ on:
 jobs:
   update-issue-status:
     runs-on: ubuntu-latest
-
     steps:
       - name: Check if Issue is CR
         id: check_cr
@@ -21,45 +20,46 @@ jobs:
         uses: actions/github-script@v6
         with:
           script: |
-            const github = require('@actions/github');
-            const octokit = github.getOctokit(process.env.GITHUB_TOKEN);
+            const { context } = require('@actions/github');
             const { issue, repository } = context.payload;
-
+            
             // Replace 'submitted' label with 'review'
             const labels = issue.labels.map(label => label.name);
             if (labels.includes('submitted')) {
-              await octokit.rest.issues.update({
+              await github.rest.issues.update({
                 owner: repository.owner.login,
                 repo: repository.name,
                 issue_number: issue.number,
                 labels: labels.filter(label => label !== 'submitted').concat('review'),
               });
             }
-
+            
             // Get the project by project number
-            const projects = await octokit.rest.projects.listForRepo({
+            const projects = await github.rest.projects.listForRepo({
               owner: repository.owner.login,
               repo: repository.name,
             });
             const project = projects.data.find(p => p.number === 2);
             if (!project) throw new Error("Project with number 2 not found");
-
+            
             // Fetch columns in the project
-            const columns = await octokit.rest.projects.listColumns({
+            const columns = await github.rest.projects.listColumns({
               project_id: project.id,
             });
             const submittedColumn = columns.data.find(col => col.name === 'submitted');
             const reviewColumn = columns.data.find(col => col.name === 'review');
-
+            
             // Move card from 'submitted' to 'review' if found
             if (submittedColumn && reviewColumn) {
-              const cards = await octokit.rest.projects.listCards({
+              const cards = await github.rest.projects.listCards({
                 column_id: submittedColumn.id,
               });
-              const card = cards.data.find(card => card.content_url && card.content_url.includes(`/issues/${issue.number}`));
-
+              const card = cards.data.find(card => 
+                card.content_url && 
+                card.content_url.includes(`/issues/${issue.number}`)
+              );
               if (card) {
-                await octokit.rest.projects.moveCard({
+                await github.rest.projects.moveCard({
                   card_id: card.id,
                   position: 'top',
                   column_id: reviewColumn.id,
