@@ -1,0 +1,68 @@
+name: Close Issue on Project Status
+
+on:
+  projects_v2_item:
+    types: [edited]
+
+permissions:
+  issues: write
+  repository-projects: read
+
+jobs:
+  close-issue:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PAT_TOKEN }}
+          script: |
+            try {
+              // Check if the change was to the status field and if it's set to "Closed"
+              const statusFieldId = 'PVTSSF_lAHOBJsXdM4ArizgzginKI8';
+              const closedOptionId = '20c68cd1';
+              
+              if (context.payload.changes?.field_value?.field_node_id === statusFieldId &&
+                  context.payload.changes?.field_value?.value?.node_id === closedOptionId) {
+                
+                // Query to get the issue number associated with this project item
+                const itemQuery = `
+                  query($nodeId: ID!) {
+                    node(id: $nodeId) {
+                      ... on ProjectV2Item {
+                        content {
+                          ... on Issue {
+                            number
+                            repository {
+                              name
+                              owner {
+                                login
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                `;
+                
+                const itemResult = await github.graphql(itemQuery, {
+                  nodeId: context.payload.projects_v2_item.node_id
+                });
+                
+                const issue = itemResult.node.content;
+                if (issue) {
+                  // Close the issue
+                  await github.rest.issues.update({
+                    owner: issue.repository.owner.login,
+                    repo: issue.repository.name,
+                    issue_number: issue.number,
+                    state: 'closed'
+                  });
+                  
+                  console.log(`Closed issue #${issue.number}`);
+                }
+              }
+            } catch (error) {
+              console.error('Error occurred:', error);
+              throw error;
+            }
